@@ -99,6 +99,8 @@ final class LocationViewModel {
         input.authorizationChanged
             .withUnretained(self)
             .flatMap { owner, status -> Single<Result<WeatherModel, AFError>> in
+                authorizationStatus.onNext(status)
+
                 switch status {
                 case .authorizedWhenInUse, .authorizedAlways:
                     guard let coordinate = owner.locationManager.location?.coordinate else { return .never() }
@@ -123,56 +125,11 @@ final class LocationViewModel {
             }
             .disposed(by: disposeBag)
 
-        input.authorizationChanged
-            .bind(with: self) { owner, status in
-                switch status {
-                case .authorizedWhenInUse, .authorizedAlways:
-                    guard let coordinate = owner.locationManager.location?.coordinate else { return }
 
-                    currentLocation.accept(coordinate)
-                    owner.fetchData(lat: coordinate.latitude.description, lon: coordinate.longitude.description, completionHandler: { responseData in
-                        switch responseData {
-                        case .success(let data):
-                            weatherData.accept(data)
-                        case .failure(let error):
-                            print(error)
-                        }
-                    })
-                case .denied:
-                    currentLocation.accept(owner.defaultLocation)
-                    owner.fetchData(lat: owner.defaultLocation.latitude.description, lon: owner.defaultLocation.longitude.description) { responseData in
-                        switch responseData {
-                        case .success(let data):
-                            weatherData.accept(data)
-                        case .failure(let error):
-                            print(error)
-                        }
-                    }
-                default:
-                    print(status)
-                }
-
-                authorizationStatus.onNext(status)
-            }
-            .disposed(by: disposeBag)
 
         return Output(currentLocation: currentLocation, authorizationStatus: authorizationStatus, weatherData: weatherData)
     }
 
-    private func fetchData(lat: String, lon: String, completionHandler: @escaping (Result<WeatherModel, AFError>) -> ()) {
-        guard let key = Bundle.main.object(forInfoDictionaryKey: "API_KEY") as? String else { return }
-        guard let url = URL(string: "https://api.openweathermap.org/data/2.5/weather?lat=\(lat)&lon=\(lon)&appid=\(key)&units=metric") else { return }
-        AF.request(url)
-            .validate()
-            .responseDecodable(of: WeatherModel.self) { responseData in
-                switch responseData.result {
-                case .success(let data):
-                    completionHandler(.success(data))
-                case .failure(let error):
-                    completionHandler(.failure(error))
-                }
-            }
-    }
 
     private func fetchData(lat: String, lon: String) -> Single<Result<WeatherModel, AFError>> {
 
