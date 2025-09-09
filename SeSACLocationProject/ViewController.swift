@@ -10,6 +10,7 @@ import SnapKit
 import RxSwift
 import RxCocoa
 import MapKit
+import CoreLocation
 
 final class ViewController: UIViewController {
 
@@ -18,6 +19,8 @@ final class ViewController: UIViewController {
     let mapView = MKMapView()
 
     let disposeBag = DisposeBag()
+
+    private let authorizationChanged = PublishRelay<CLAuthorizationStatus>()
 
     private let locationButton: UIButton = {
         let button = UIButton()
@@ -98,7 +101,7 @@ final class ViewController: UIViewController {
 
     private func bind() {
 
-        let input = LocationViewModel.Input(locationButton: locationButton.rx.tap, refreshButton: refreshButton.rx.tap)
+        let input = LocationViewModel.Input(locationButton: locationButton.rx.tap, refreshButton: refreshButton.rx.tap, authorizationChanged: authorizationChanged.asObservable())
 
         let output = viewModel.transform(input: input)
 
@@ -117,17 +120,17 @@ final class ViewController: UIViewController {
             .bind(to: resultLabel.rx.text)
             .disposed(by: disposeBag)
 
-        output.currentLocation
-            .withLatestFrom(output.authorizationStatus) { ($0, $1) }
+        Observable.combineLatest(output.currentLocation, output.authorizationStatus)
             .bind(with: self) { owner, value in
                 let (location, status) = value
                 switch status {
                 case .notDetermined:
                     print("아직 결정이 안된 상태")
-                case .authorizedWhenInUse, .denied:
-                    let region = MKCoordinateRegion(center: location, latitudinalMeters: 500, longitudinalMeters: 500)
-                    owner.mapView.setRegion(region, animated: true)
-                    owner.makeAnnotation(lat: location.latitude, lon: location.longitude)
+                case .authorizedWhenInUse:
+                    owner.setRegionAndAnnotation(center: location)
+                case .denied:
+                    owner.setRegionAndAnnotation(center: location)
+                    owner.showLocationSettingAlert()
                 default:
                     print(status)
                 }
@@ -149,11 +152,18 @@ final class ViewController: UIViewController {
         present(alert, animated: true)
     }
 
+    private func setRegionAndAnnotation(center: CLLocationCoordinate2D) {
+        let region = MKCoordinateRegion(center: center, latitudinalMeters: 500, longitudinalMeters: 500)
+        mapView.setRegion(region, animated: true)
+        makeAnnotation(lat: center.latitude, lon: center.longitude)
+    }
+
     private func makeAnnotation(lat: CLLocationDegrees, lon: CLLocationDegrees) {
         let annotation = MKPointAnnotation()
         annotation.coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
         mapView.addAnnotation(annotation)
     }
+
 }
 
 extension ViewController: CLLocationManagerDelegate {
@@ -164,11 +174,13 @@ extension ViewController: CLLocationManagerDelegate {
 
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        authorizationChanged.accept(manager.authorizationStatus)
         print(#function)
     }
 
     func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
         print(#function)
+        authorizationChanged.accept(status)
     }
 }
 

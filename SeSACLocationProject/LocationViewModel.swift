@@ -22,6 +22,7 @@ final class LocationViewModel {
     struct Input {
         let locationButton: ControlEvent<Void>
         let refreshButton: ControlEvent<Void>
+        let authorizationChanged: Observable<CLAuthorizationStatus>
     }
 
     struct State {
@@ -30,7 +31,7 @@ final class LocationViewModel {
 
     struct Output {
         let currentLocation: PublishRelay<CLLocationCoordinate2D>
-        let authorizationStatus: BehaviorSubject<CLAuthorizationStatus>
+        let authorizationStatus: PublishSubject<CLAuthorizationStatus>
         let weatherData: PublishRelay<WeatherModel>
     }
 
@@ -40,7 +41,7 @@ final class LocationViewModel {
         var state = State(savedLocation: defaultLocation)
 
         let currentLocation = PublishRelay<CLLocationCoordinate2D>()
-        let authorizationStatus = BehaviorSubject<CLAuthorizationStatus>(value: .notDetermined)
+        let authorizationStatus = PublishSubject<CLAuthorizationStatus>()
         let weatherData = PublishRelay<WeatherModel>()
 
         input.locationButton
@@ -49,11 +50,9 @@ final class LocationViewModel {
 
                 switch status {
                 case .notDetermined:
-                    authorizationStatus.onNext(.notDetermined)
                     owner.locationManager.desiredAccuracy = kCLLocationAccuracyBest
                     owner.locationManager.requestWhenInUseAuthorization()
                 case .authorizedWhenInUse:
-                    authorizationStatus.onNext(.authorizedWhenInUse)
                     owner.locationManager.startUpdatingLocation()
                     guard let coordinate = owner.locationManager.location?.coordinate else { return }
 
@@ -69,7 +68,6 @@ final class LocationViewModel {
                         }
                     })
                 case .denied:
-                    authorizationStatus.onNext(.denied)
                     currentLocation.accept(owner.defaultLocation)
                     state.savedLocation = owner.defaultLocation
                     owner.fetchData(lat: owner.defaultLocation.latitude.description, lon: owner.defaultLocation.longitude.description) { responseData in
@@ -83,6 +81,8 @@ final class LocationViewModel {
                 default:
                     print(status)
                 }
+
+                authorizationStatus.onNext(status)
             }
             .disposed(by: disposeBag)
 
@@ -99,23 +99,41 @@ final class LocationViewModel {
             }
             .disposed(by: disposeBag)
 
+        input.authorizationChanged
+            .bind(with: self) { owner, status in
+                switch status {
+                case .authorizedWhenInUse, .authorizedAlways:
+                    guard let coordinate = owner.locationManager.location?.coordinate else { return }
+
+                    currentLocation.accept(coordinate)
+                    owner.fetchData(lat: coordinate.latitude.description, lon: coordinate.longitude.description, completionHandler: { responseData in
+                        switch responseData {
+                        case .success(let data):
+                            weatherData.accept(data)
+                        case .failure(let error):
+                            print(error)
+                        }
+                    })
+                case .denied:
+                    currentLocation.accept(owner.defaultLocation)
+                    owner.fetchData(lat: owner.defaultLocation.latitude.description, lon: owner.defaultLocation.longitude.description) { responseData in
+                        switch responseData {
+                        case .success(let data):
+                            weatherData.accept(data)
+                        case .failure(let error):
+                            print(error)
+                        }
+                    }
+                default:
+                    print(status)
+                }
+
+                authorizationStatus.onNext(status)
+            }
+            .disposed(by: disposeBag)
+
         return Output(currentLocation: currentLocation, authorizationStatus: authorizationStatus, weatherData: weatherData)
     }
-//
-//    private func checkLocation() {
-//        DispatchQueue.global().async {
-//            if CLLocationManager.locationServicesEnabled() {
-//                print("권한 사용이 가능한 상태")
-//
-//                DispatchQueue.main.async { [weak self] in
-//                    guard let self else { return }
-//
-//                }
-//            } else {
-//                print("위치 권한이 꺼져 있어서 위치 권한 요청이 불가능합니다")
-//            }
-//        }
-//    }
 
     private func fetchData(lat: String, lon: String, completionHandler: @escaping (Result<WeatherModel, AFError>) -> ()) {
         guard let key = Bundle.main.object(forInfoDictionaryKey: "API_KEY") as? String else { return }
