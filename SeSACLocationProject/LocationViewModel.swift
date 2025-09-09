@@ -1,0 +1,152 @@
+//
+//  LocationViewMdoel.swift
+//  SeSACLocation
+//
+//  Created by Lee on 9/9/25.
+//
+
+import Foundation
+import CoreLocation
+import RxSwift
+import RxCocoa
+import Alamofire
+
+final class LocationViewModel {
+
+    let disposeBag = DisposeBag()
+
+    private let defaultLocation = CLLocationCoordinate2D(latitude: 37.519485, longitude: 126.890398)
+
+    private let locationManager = CLLocationManager()
+
+    struct Input {
+        let locationButton: ControlEvent<Void>
+        let refreshButton: ControlEvent<Void>
+    }
+
+    struct State {
+        var savedLocation: CLLocationCoordinate2D
+    }
+
+    struct Output {
+        let currentLocation: PublishRelay<CLLocationCoordinate2D>
+        let authorizationStatus: BehaviorSubject<CLAuthorizationStatus>
+        let weatherData: PublishRelay<WeatherModel>
+    }
+
+
+    func transform(input: Input) -> Output {
+
+        var state = State(savedLocation: defaultLocation)
+
+        let currentLocation = PublishRelay<CLLocationCoordinate2D>()
+        let authorizationStatus = BehaviorSubject<CLAuthorizationStatus>(value: .notDetermined)
+        let weatherData = PublishRelay<WeatherModel>()
+
+        input.locationButton
+            .bind(with: self) { owner, _ in
+                let status = owner.locationManager.authorizationStatus
+
+                switch status {
+                case .notDetermined:
+                    authorizationStatus.onNext(.notDetermined)
+                    owner.locationManager.desiredAccuracy = kCLLocationAccuracyBest
+                    owner.locationManager.requestWhenInUseAuthorization()
+                case .authorizedWhenInUse:
+                    authorizationStatus.onNext(.authorizedWhenInUse)
+                    owner.locationManager.startUpdatingLocation()
+                    guard let coordinate = owner.locationManager.location?.coordinate else { return }
+
+                    currentLocation.accept(coordinate)
+                    state.savedLocation = coordinate
+
+                    owner.fetchData(lat: coordinate.latitude.description, lon: coordinate.longitude.description, completionHandler: { responseData in
+                        switch responseData {
+                        case .success(let data):
+                            weatherData.accept(data)
+                        case .failure(let error):
+                            print(error)
+                        }
+                    })
+                case .denied:
+                    authorizationStatus.onNext(.denied)
+                    currentLocation.accept(owner.defaultLocation)
+                    state.savedLocation = owner.defaultLocation
+                    owner.fetchData(lat: owner.defaultLocation.latitude.description, lon: owner.defaultLocation.longitude.description) { responseData in
+                        switch responseData {
+                        case .success(let data):
+                            weatherData.accept(data)
+                        case .failure(let error):
+                            print(error)
+                        }
+                    }
+                default:
+                    print(status)
+                }
+            }
+            .disposed(by: disposeBag)
+
+        input.refreshButton
+            .bind(with: self) { owner, _ in
+                owner.fetchData(lat: state.savedLocation.latitude.description, lon: state.savedLocation.longitude.description) { responseData in
+                    switch responseData {
+                    case .success(let data):
+                        weatherData.accept(data)
+                    case .failure(let error):
+                        print(error)
+                    }
+                }
+            }
+            .disposed(by: disposeBag)
+
+        return Output(currentLocation: currentLocation, authorizationStatus: authorizationStatus, weatherData: weatherData)
+    }
+//
+//    private func checkLocation() {
+//        DispatchQueue.global().async {
+//            if CLLocationManager.locationServicesEnabled() {
+//                print("권한 사용이 가능한 상태")
+//
+//                DispatchQueue.main.async { [weak self] in
+//                    guard let self else { return }
+//
+//                }
+//            } else {
+//                print("위치 권한이 꺼져 있어서 위치 권한 요청이 불가능합니다")
+//            }
+//        }
+//    }
+
+    private func fetchData(lat: String, lon: String, completionHandler: @escaping (Result<WeatherModel, AFError>) -> ()) {
+        guard let key = Bundle.main.object(forInfoDictionaryKey: "API_KEY") as? String else { return }
+        guard let url = URL(string: "https://api.openweathermap.org/data/2.5/weather?lat=\(lat)&lon=\(lon)&appid=\(key)&units=metric") else { return }
+        AF.request(url)
+            .validate()
+            .responseDecodable(of: WeatherModel.self) { responseData in
+                switch responseData.result {
+                case .success(let data):
+                    completionHandler(.success(data))
+                case .failure(let error):
+                    completionHandler(.failure(error))
+                }
+            }
+    }
+//    private func fetchData(key: String, lat: String, lon: String) -> Single<Result<WeatherModel, AFError>> {
+//
+//        return Single.create { value in
+//            if let url = URL(string: "https://api.openweathermap.org/data/2.5/weather?lat=\(lat)&lon=\(lon)&appid=\(key)&units=metric") {
+//                AF.request(url)
+//                    .validate()
+//                    .responseDecodable(of: WeatherModel.self) { responseData in
+//                        switch responseData.result {
+//                        case .success(let data):
+//                            value(.success(.success(data)))
+//                        case .failure(let error):
+//                            value(.success(.failure(error)))
+//                        }
+//                    }
+//            }
+//            return Disposables.create()
+//        }
+//    }
+}
