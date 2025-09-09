@@ -7,19 +7,17 @@
 
 import UIKit
 import SnapKit
-import CoreLocation
 import RxSwift
 import RxCocoa
 import MapKit
-import Alamofire
 
 final class ViewController: UIViewController {
+
+    let viewModel = LocationViewModel()
 
     let mapView = MKMapView()
 
     let disposeBag = DisposeBag()
-
-    let defaultLocation = CLLocationCoordinate2D(latitude: 37.519485, longitude: 126.890398)
 
     private let locationButton: UIButton = {
         let button = UIButton()
@@ -99,125 +97,42 @@ final class ViewController: UIViewController {
     }
 
     private func bind() {
-        locationButton.rx.tap
-            .bind(with: self) { owner, _ in
-                owner.checkLocation()
+
+        let input = LocationViewModel.Input(locationButton: locationButton.rx.tap, refreshButton: refreshButton.rx.tap)
+
+        let output = viewModel.transform(input: input)
+
+        output.weatherData
+            .map {
+                let date = Date()
+                let dateStr = DateManager.changeDateForString(date: date)
+                return """
+                \(dateStr)
+                현재온도: \($0.main.temp)°C
+                최저: \($0.main.tempMin) / 최고 \($0.main.tempMax)
+                풍속: \($0.wind.speed)m/s
+                습도: \($0.main.humidity)%
+                """
             }
+            .bind(to: resultLabel.rx.text)
             .disposed(by: disposeBag)
 
-        refreshButton.rx.tap
-            .bind(with: self) { owner, _ in
-                let coordinate = owner.defaultLocation
-                owner.fetchData(lat: coordinate.latitude.description, lon: coordinate.longitude.description) { responseData in
-                    switch responseData {
-                    case .success(let data):
-                        let date = Date()
-                        let dateStr = DateManager.changeDateForString(date: date)
-                        self.resultLabel.text = """
-                        \(dateStr)
-                        현재온도: \(data.main.temp)°C
-                        최저: \(data.main.tempMin) / 최고 \(data.main.tempMax) 
-                        풍속: \(data.wind.speed)m/s
-                        습도: \(data.main.humidity)%
-                        """
-                    case .failure(let error):
-                        print(error)
-                    }
+        output.currentLocation
+            .withLatestFrom(output.authorizationStatus) { ($0, $1) }
+            .bind(with: self) { owner, value in
+                let (location, status) = value
+                switch status {
+                case .notDetermined:
+                    print("아직 결정이 안된 상태")
+                case .authorizedWhenInUse, .denied:
+                    let region = MKCoordinateRegion(center: location, latitudinalMeters: 500, longitudinalMeters: 500)
+                    owner.mapView.setRegion(region, animated: true)
+                    owner.makeAnnotation(lat: location.latitude, lon: location.longitude)
+                default:
+                    print(status)
                 }
             }
             .disposed(by: disposeBag)
-    }
-
-    private func checkLocation() {
-        DispatchQueue.global().async {
-            if CLLocationManager.locationServicesEnabled() {
-                print("권한 사용이 가능한 상태")
-
-                DispatchQueue.main.async { [weak self] in
-                    guard let self else { return }
-                    self.checkCurrentLocationAuthorization()
-                }
-            } else {
-                print("위치 권한이 꺼져있어서 위치 권한을 요청할 수 없습니다")
-            }
-        }
-    }
-
-    private func checkCurrentLocationAuthorization() {
-
-        var status: CLAuthorizationStatus
-
-        if #available(iOS 14.0, *) {
-            status = locationManager.authorizationStatus
-        } else {
-            status = CLLocationManager.authorizationStatus()
-        }
-
-        switch status {
-        case .notDetermined:
-            print("아직 위치 권한에 대한 결정이 안된 상태")
-            locationManager.desiredAccuracy = kCLLocationAccuracyBest
-            locationManager.requestWhenInUseAuthorization()
-        case .denied:
-            print("권한 거부됨")
-
-            let region = MKCoordinateRegion(center: defaultLocation, latitudinalMeters: 500, longitudinalMeters: 500)
-            mapView.setRegion(region, animated: true)
-
-            showLocationSettingAlert()
-
-            makeAnnotation(lat: defaultLocation.latitude, lon: defaultLocation.longitude)
-
-            fetchData(lat: defaultLocation.latitude.description, lon: defaultLocation.longitude.description) { [weak self] responseData in
-                guard let self else { return }
-                switch responseData {
-                case .success(let data):
-                    let date = Date()
-                    let dateStr = DateManager.changeDateForString(date: date)
-                    self.resultLabel.text = """
-                    \(dateStr)
-                    현재온도: \(data.main.temp)°C
-                    최저: \(data.main.tempMin) / 최고 \(data.main.tempMax) 
-                    풍속: \(data.wind.speed)m/s
-                    습도: \(data.main.humidity)%
-                    """
-                case .failure(let error):
-                    print(error)
-                }
-            }
-
-        case .authorizedWhenInUse:
-            print("사용하는 동안 허용한 상태")
-            locationManager.startUpdatingLocation()
-
-            guard let coordinate = locationManager.location?.coordinate else { return }
-
-            let region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 500, longitudinalMeters: 500)
-            mapView.setRegion(region, animated: true)
-
-            makeAnnotation(lat: coordinate.latitude, lon: coordinate.longitude)
-
-            fetchData(lat: coordinate.latitude.description, lon: coordinate.longitude.description) { [weak self] responseData in
-                guard let self else { return }
-                switch responseData {
-                case .success(let data):
-                    let date = Date()
-                    let dateStr = DateManager.changeDateForString(date: date)
-                    self.resultLabel.text = """
-                        \(dateStr)
-                        현재온도: \(data.main.temp)°C
-                        최저: \(data.main.tempMin) / 최고 \(data.main.tempMax)  
-                        풍속: \(data.wind.speed)m/s
-                        습도: \(data.main.humidity)%
-                        """
-                case .failure(let error):
-                    print(error)
-                }
-            }
-
-        default:
-            print(status)
-        }
     }
 
     private func showLocationSettingAlert() {
@@ -232,21 +147,6 @@ final class ViewController: UIViewController {
         alert.addAction(goSetting)
         alert.addAction(cancel)
         present(alert, animated: true)
-    }
-
-    private func fetchData(lat: String, lon: String, completionHandler: @escaping (Result<WeatherModel, AFError>) -> ()) {
-        guard let key = Bundle.main.object(forInfoDictionaryKey: "API_KEY") as? String else { return }
-        guard let url = URL(string: "https://api.openweathermap.org/data/2.5/weather?lat=\(lat)&lon=\(lon)&appid=\(key)&units=metric") else { return }
-        AF.request(url)
-            .validate()
-            .responseDecodable(of: WeatherModel.self) { responseData in
-                switch responseData.result {
-                case .success(let data):
-                    completionHandler(.success(data))
-                case .failure(let error):
-                    completionHandler(.failure(error))
-                }
-            }
     }
 
     private func makeAnnotation(lat: CLLocationDegrees, lon: CLLocationDegrees) {
