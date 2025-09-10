@@ -15,6 +15,7 @@ final class PhotoViewController: UIViewController {
     var itemProviders: [NSItemProvider] = []
     var iterator: IndexingIterator<[NSItemProvider]>?
     var images: [UIImage] = []
+    var imageLoadTrigger = PublishSubject<Void>()
 
     let disposeBag = DisposeBag()
 
@@ -106,33 +107,24 @@ extension PhotoViewController: PHPickerViewControllerDelegate {
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
         print(#function)
 
-        let dispatchGroup = DispatchGroup()
-        var images: [UIImage] = []
-
-        results.forEach { result in
+        for result in results {
             let itemProvider = result.itemProvider
             if itemProvider.canLoadObject(ofClass: UIImage.self) {
-                dispatchGroup.enter()
-                itemProvider.loadObject(ofClass: UIImage.self) { image, error in
-                    defer { dispatchGroup.leave() }
-
-                    if let image = image as? UIImage {
-                        images.append(image)
-                    }
-
-                    if let error = error {
-                        print(error)
-                    }
+                itemProvider.loadObject(ofClass: UIImage.self) { [weak self] image , error in
+                    guard let self else { return }
+                    self.images.append(image as! UIImage)
+                    self.imageLoadTrigger.onNext(())
                 }
             }
-
-            dispatchGroup.notify(queue: .main) { [weak self] in
-                guard let self = self else { return }
-
-                self.images = images
-                self.photoDatas.accept(self.images)
-            }
         }
+
+        imageLoadTrigger
+//            .skip(2)
+            .bind(with: self) { owner, _ in
+                owner.photoDatas.accept(self.images)
+            }
+            .disposed(by: disposeBag)
+
         picker.dismiss(animated: true)
     }
 }
