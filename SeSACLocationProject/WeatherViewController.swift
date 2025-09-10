@@ -12,7 +12,7 @@ import RxCocoa
 import MapKit
 import CoreLocation
 
-final class ViewController: UIViewController {
+final class WeatherViewController: UIViewController {
 
     let viewModel = LocationViewModel()
 
@@ -44,6 +44,16 @@ final class ViewController: UIViewController {
         return button
     }()
 
+    private let photoButton: UIButton = {
+        let button = UIButton()
+        button.layer.cornerRadius = 25
+        button.backgroundColor = .black
+        button.clipsToBounds = true
+        button.setImage(UIImage(systemName: "camera.fill"), for: .normal)
+        button.tintColor = .white
+        return button
+    }()
+
     private let resultLabel: UILabel = {
         let label = UILabel()
         label.text = "날씨 정보를 불러오는 중..."
@@ -68,7 +78,7 @@ final class ViewController: UIViewController {
     }
 
     private func configureHierarchy() {
-        [locationButton, refreshButton, resultLabel].forEach { view.addSubview($0) }
+        [locationButton, photoButton, refreshButton, resultLabel].forEach { view.addSubview($0) }
 
         view.addSubview(mapView)
     }
@@ -77,6 +87,12 @@ final class ViewController: UIViewController {
         locationButton.snp.makeConstraints { make in
             make.size.equalTo(50)
             make.leading.bottom.equalTo(view.safeAreaLayoutGuide).inset(30)
+        }
+
+        photoButton.snp.makeConstraints { make in
+            make.size.equalTo(50)
+            make.bottom.equalTo(view.safeAreaLayoutGuide).inset(30)
+            make.centerX.equalTo(view.safeAreaLayoutGuide)
         }
 
         refreshButton.snp.makeConstraints { make in
@@ -136,6 +152,13 @@ final class ViewController: UIViewController {
                 }
             }
             .disposed(by: disposeBag)
+
+        photoButton.rx.tap
+            .bind(with: self) { owner, value in
+                let vc = PhotoViewController()
+                owner.navigationController?.pushViewController(vc, animated: true)
+            }
+            .disposed(by: disposeBag)
     }
 
     private func showLocationSettingAlert() {
@@ -166,7 +189,7 @@ final class ViewController: UIViewController {
 
 }
 
-extension ViewController: CLLocationManagerDelegate {
+extension WeatherViewController: CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         print(#function)
